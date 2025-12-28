@@ -3,6 +3,6 @@
 
 ## 在仓库的 Settings -> Secrets and variables -> Actions 中添加：
 
-# ALTR_EMAIL
+ ALTR_EMAIL，就是账号
 
-# ALTR_PASSWORD
+ ALTR_PASSWORD，就是密码
