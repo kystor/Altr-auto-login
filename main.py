@@ -14,122 +14,128 @@ LOGIN_URL = "https://console.altr.cc/login"
 # ===========================================
 
 def run_auto_claim():
-    print(">>> [启动] V5 侦测模式启动...")
+    print(">>> [启动] V6 通用适配版启动...")
     
     if not USER_EMAIL or not USER_PASSWORD:
         print(">>> [错误] 环境变量未设置！")
         return
 
-    # --- 浏览器配置 (增强抗检测) ---
+    # --- 浏览器配置 (保持之前的成功配置) ---
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new") 
+    options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    # 随机化 User-Agent (使用最新的 Chrome 120)
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    # 忽略证书错误
-    options.add_argument("--ignore-certificate-errors")
-
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
 
-    # 注入 JS 绕过 webdriver 检测
+    # 注入防检测 JS
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             window.navigator.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
         """
     })
 
     try:
-        print(f">>> [访问] 正在加载: {LOGIN_URL}")
+        # --- 1. 登录阶段 ---
+        print(f">>> [访问] 打开登录页: {LOGIN_URL}")
         driver.get(LOGIN_URL)
-        
-        # 强制等待 10 秒，让 JS 和盾牌跑完
-        print(">>> [等待] 正在等待页面加载 (10s)...")
-        time.sleep(10)
+        time.sleep(5) # 等待页面元素加载
 
-        # --- 🔍 侦测环节 ---
-        page_title = driver.title
-        print(f">>> [调试] 当前页面标题: [{page_title}]")
+        print(">>> [登录] 正在定位输入框...")
         
-        # 打印一下当前的 URL，看看有没有被重定向
-        print(f">>> [调试] 当前 URL: {driver.current_url}")
+        # 核心修改：获取所有 input 标签，按顺序填入
+        # 因为日志显示页面只有2个输入框，第1个是账号(text)，第2个是密码(password)
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        
+        if len(inputs) < 2:
+            print(f">>> [错误] 页面输入框数量不足 (找到 {len(inputs)} 个)，可能被拦截。")
+            print(f">>> [调试] 页面内容: {driver.find_element(By.TAG_NAME, 'body').text[:200]}")
+            return
 
-        # 尝试寻找任何输入框 (范围更广)
+        # 第一个框填账号 (无论它是 type='text' 还是 'email')
+        email_field = inputs[0]
+        # 第二个框填密码
+        password_field = inputs[1]
+
+        print(f">>> [登录] 找到输入框 (Type: {email_field.get_attribute('type')})，正在输入账号...")
+        email_field.clear()
+        email_field.send_keys(USER_EMAIL)
+        time.sleep(0.5)
+
+        print(">>> [登录] 正在输入密码...")
+        password_field.clear()
+        password_field.send_keys(USER_PASSWORD)
+        time.sleep(0.5)
+
+        # 点击登录按钮
+        # 寻找 type='submit' 或者包含 'Login' 文字的按钮
         try:
-            print(">>> [寻找] 尝试定位输入框...")
-            # 只要是 input 标签我们都找找看
-            inputs = driver.find_elements(By.TAG_NAME, "input")
-            print(f">>> [调试] 页面上发现了 {len(inputs)} 个输入框。")
-            
-            if len(inputs) == 0:
-                # 如果一个输入框都没有，说明被拦截了
-                raise Exception("页面上没有发现任何输入框！")
-
-            # 寻找特定的邮箱框
-            email_input = None
-            for inp in inputs:
-                input_type = inp.get_attribute("type")
-                input_placeholder = inp.get_attribute("placeholder")
-                # 打印属性帮我们分析
-                print(f"    - 发现输入框: type='{input_type}', placeholder='{input_placeholder}'")
-                
-                if input_type == "email" or (input_placeholder and "mail" in input_placeholder.lower()):
-                    email_input = inp
-                    break
-            
-            if not email_input:
-                # 再次尝试用 CSS selector 强找
-                email_input = driver.find_element(By.CSS_SELECTOR, "input[type='email']")
-
-            print(">>> [登录] 找到邮箱输入框，准备输入...")
-            email_input.clear()
-            email_input.send_keys(USER_EMAIL)
-            time.sleep(1)
-
-            # 寻找密码框
-            password_input = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
-            password_input.clear()
-            password_input.send_keys(USER_PASSWORD)
-            time.sleep(1)
-
-            # 点击登录
             submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-            driver.execute_script("arguments[0].click();", submit_btn)
-            print(">>> [动作] 点击了登录按钮")
+        except:
+            # 备选方案：通过文字找按钮
+            submit_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Login')]")
+            
+        print(">>> [登录] 点击提交按钮...")
+        driver.execute_script("arguments[0].click();", submit_btn)
 
-            # 等待结果
-            time.sleep(5)
-            # 检查是否有 Credits 元素
-            if "credits" in driver.page_source:
-                 print(">>> [成功] 登录成功！页面包含 'credits'")
-                 # 这里可以继续你的签到逻辑...
+        # --- 2. 验证登录 ---
+        print(">>> [验证] 等待跳转和积分显示...")
+        try:
+            # 等待 URL 变化 (不再包含 login) 或者出现积分
+            WebDriverWait(driver, 15).until(
+                lambda d: "login" not in d.current_url or len(d.find_elements(By.XPATH, "//*[contains(text(), 'credits')]")) > 0
+            )
+            
+            # 再次确认积分是否存在
+            credits = driver.find_elements(By.XPATH, "//*[contains(text(), 'credits')]")
+            if credits:
+                print(f">>> [成功] 登录成功！检测到积分: {credits[0].text}")
             else:
-                 print(">>> [警告] 未检测到积分信息，可能需要手动验证。")
+                print(">>> [警告] 未检测到积分，但 URL 已跳转，尝试继续...")
 
         except Exception as e:
-            print("\n========== ⚠️ 异常诊断报告 ⚠️ ==========")
-            print(f"错误信息: {e}")
-            print("-" * 30)
-            print(">>> [抓取] 页面源代码片段 (前 1000 字符):")
-            # 获取页面 Body 的文本内容，如果是 Cloudflare 会显示 "Just a moment..."
-            try:
-                body_text = driver.find_element(By.TAG_NAME, "body").text
-                # 替换换行符防止报错
-                clean_text = body_text.replace('\n', '  ')[:1000]
-                print(clean_text)
-            except:
-                print("无法获取页面文本。")
-            print("=" * 40)
+            print(">>> [警告] 登录验证超时，可能已登录但未检测到元素，强制继续...")
 
-    except Exception as outer_e:
-        print(f">>> [致命错误] {outer_e}")
+        # --- 3. 签到阶段 ---
+        print(">>> [导航] 前往 Rewards 页面...")
+        driver.get("https://console.altr.cc/rewards")
+        time.sleep(5)
+
+        try:
+            # 寻找主要按钮
+            claim_button = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button.w-full"))
+            )
+            btn_text = claim_button.text
+            print(f">>> [状态] Rewards 按钮文字: [{btn_text}]")
+
+            if "Login" in btn_text:
+                print(">>> [失败] 严重错误：页面仍显示 Login，说明登录失败。")
+            elif "Claimed today" in btn_text or claim_button.get_attribute("disabled"):
+                print(">>> [结果] ✅ 今天已签到，任务完成。")
+            else:
+                print(">>> [动作] 点击签到...")
+                driver.execute_script("arguments[0].click();", claim_button)
+                time.sleep(3)
+                print(">>> [结果] ✅ 签到指令已发送。")
+
+        except Exception as e:
+            print(f">>> [错误] 未能找到签到按钮: {e}")
+
+    except Exception as e:
+        print(f">>> [崩溃] 程序异常: {e}")
+        # 如果出错，打印最后一点源码辅助
+        try:
+            print(f">>> [调试] 异常时页面内容: {driver.find_element(By.TAG_NAME, 'body').text[:500]}")
+        except: pass
 
     finally:
+        print(">>> [结束] 关闭浏览器")
         driver.quit()
 
 if __name__ == "__main__":
