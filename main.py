@@ -24,7 +24,7 @@ def parse_credits(text):
         return 0.0
 
 def run_auto_claim():
-    print(">>> [启动] V7 精算师版 (积分核对模式)...")
+    print(">>> [启动] Altr自动签到脚本")
     
     if not USER_EMAIL or not USER_PASSWORD:
         print(">>> [错误] 环境变量未设置！")
