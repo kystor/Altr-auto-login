@@ -20,77 +20,91 @@ def run_renewal_for_user(username, password):
     
     # --- 1. 防崩溃浏览器配置 ---
     options = webdriver.ChromeOptions()
-    # 使用新版无头模式
     options.add_argument('--headless=new') 
-    
-    # 核心防崩溃参数 (针对 GitHub Actions 环境)
     options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage') # 解决共享内存不足导致的崩溃
+    options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
-    options.add_argument('--disable-software-rasterizer') # 关键：防止图形渲染崩溃
+    options.add_argument('--disable-software-rasterizer')
     options.add_argument('--disable-extensions')
-    options.add_argument('--disable-infobars')
     options.add_argument('--window-size=1920,1080')
-    
-    # 伪装 User-Agent (防止被识别为爬虫)
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     driver = None
     try:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 30) # 延长等待时间到30秒
+        wait = WebDriverWait(driver, 30) # 全局等待时间
 
         # --- 2. 登录流程 ---
         print(f">>> [登录] 打开页面: {LOGIN_URL}")
         driver.get(LOGIN_URL)
         
-        # 调试信息
-        print(f">>> [调试] 页面标题: {driver.title}")
-
-        # --- 适配 Logto 登录系统 ---
-        # Logto 的用户名输入框 name 通常是 "identifier"
-        # 我们查找: name="identifier" (Logto专用) 或 email 或 username
-        print(">>> [登录] 正在寻找账号输入框...")
+        # 寻找账号输入框 (Logto 通常用 identifier)
+        print(">>> [登录] 正在输入账号...")
         user_input = wait.until(EC.presence_of_element_located(
             (By.CSS_SELECTOR, "input[name='identifier'], input[name='email'], input[name='username']")
         ))
         user_input.clear()
         user_input.send_keys(username)
-        print(">>> [登录] 已输入账号")
-        time.sleep(0.5) # 稍微停顿
+        print(">>> [登录] 账号输入完毕")
+        
+        # ============================================================
+        # 【核心修复】智能处理“两步登录”或“密码框延迟”
+        # ============================================================
+        pwd_input = None
+        try:
+            # 方案A：尝试直接等待密码框出现 (只等3秒)
+            print(">>> [登录] 尝试查找密码框...")
+            pwd_input = WebDriverWait(driver, 3).until(
+                EC.visibility_of_element_located((By.NAME, "password"))
+            )
+        except TimeoutException:
+            # 方案B：如果3秒没等到，说明需要点击“下一步”
+            print(">>> [登录] 未直接发现密码框，判断为'两步登录'模式，正在点击下一步...")
+            
+            # 寻找并点击提交按钮 (通常是 Sign In 或 Next)
+            next_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            next_btn.click()
+            
+            # 点击后，必须等待密码框加载出来
+            print(">>> [登录] 已点击下一步，正在等待密码框加载...")
+            pwd_input = wait.until(
+                EC.visibility_of_element_located((By.NAME, "password"))
+            )
 
-        # 寻找密码输入框
-        pwd_input = driver.find_element(By.NAME, "password")
+        # 输入密码
         pwd_input.clear()
         pwd_input.send_keys(password)
-        print(">>> [登录] 已输入密码")
-        time.sleep(0.5)
+        print(">>> [登录] 密码输入完毕")
+        time.sleep(1) # 稍微缓冲，防止点击太快
 
-        # 点击登录按钮
-        submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-        submit_btn.click()
+        # 再次点击登录按钮
+        # 注意：页面可能有变化，重新查找按钮最稳妥
+        login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        login_btn.click()
         print(">>> [登录] 点击提交，等待跳转...")
 
         # 验证是否登录成功
         try:
-            # 等待 URL 变化，或者页面出现 Dashboard 字样
             wait.until(EC.url_matches(r"overview|dashboard"))
             print(">>> [登录] 登录成功！")
         except TimeoutException:
             print(f">>> [错误] 登录超时，当前 URL: {driver.current_url}")
-            # 如果还在登录页，可能是密码错误或由于JS加载慢导致
-            # 尝试打印页面上的错误提示（如果有）
+            # 尝试打印页面上的错误信息
             try:
-                error_msg = driver.find_element(By.CSS_SELECTOR, "[role='alert'], .error").text
-                print(f">>> [页面提示] {error_msg}")
+                print(f">>> [页面提示] {driver.find_element(By.CSS_SELECTOR, '.error, [role=alert]').text}")
             except:
                 pass
-            raise Exception("Login timeout")
+            raise Exception("Login failed")
 
         # --- 3. 获取服务器列表 ---
         server_links = []
-        # 这里的逻辑保持不变
+        # 等待页面加载出列表（防止刚跳转还没渲染）
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='server?id=']")))
+        except:
+            print(">>> [提示] 未找到服务器链接，可能是账户下没有服务器。")
+
         buttons = driver.find_elements(By.CSS_SELECTOR, "a[href*='server?id=']")
         for btn in buttons:
             href = btn.get_attribute("href")
@@ -104,18 +118,14 @@ def run_renewal_for_user(username, password):
             print(f"--- 正在处理服务器: {link} ---")
             driver.get(link)
             try:
-                # 寻找续费按钮
                 renew_btn = wait.until(EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, "a.action-button[onclick*='handleServerRenewal']")
                 ))
-                
-                # 滚动并点击
                 driver.execute_script("arguments[0].scrollIntoView();", renew_btn)
                 time.sleep(1) 
                 renew_btn.click()
                 print(">>> [操作] 点击了续费按钮")
                 
-                # 处理弹窗
                 try:
                     WebDriverWait(driver, 3).until(EC.alert_is_present())
                     driver.switch_to.alert.accept()
@@ -130,13 +140,13 @@ def run_renewal_for_user(username, password):
             except Exception as e:
                 print(f">>> [出错] 服务器处理错误: {e}")
 
-    except WebDriverException as e:
-        print(f">>> [致命错误] 浏览器崩溃或驱动异常: {e}")
-        # 如果再次崩溃，查看是否是因为内存不足
-        print(">>> [建议] 如果持续崩溃，可能是 GitHub Runner 内存不足。")
-
     except Exception as e:
-        print(f">>> [失败] 账号 {username} 逻辑错误: {e}")
+        print(f">>> [失败] 账号 {username} 发生错误: {e}")
+        # 如果出错，打印一下源码开头，方便看是不是还没进页面
+        if driver:
+            try:
+                print(f">>> [调试] 错误时页面源码前300字: {driver.page_source[:300]}")
+            except: pass
 
     finally:
         if driver:
