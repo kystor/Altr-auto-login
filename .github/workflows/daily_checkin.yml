@@ -35,7 +35,7 @@ jobs:
       #   env: # 将 GitHub Secrets 里的密码注入到环境变量中
       #     ALTR_EMAIL: ${{ secrets.ALTR_EMAIL }}
       #     ALTR_PASSWORD: ${{ secrets.ALTR_PASSWORD }}
-      #   run: python -u main.py # 第四步：运行你的 Python 脚本
+      #   run: python -u Altr.py # 第四步：运行你的 Python 脚本
 
       # ========================================================
       # 新脚本区域 (Zampto 自动续费)
